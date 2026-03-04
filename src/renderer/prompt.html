@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none';">
+    <title>Python Input</title>
+    <link rel="stylesheet" href="prompt.css">
+</head>
+
+<body>
+    <div class="header">
+        <span class="icon">🐍</span>
+        <span class="title">Python Input</span>
+    </div>
+
+    <div class="prompt" id="promptText">请输入:</div>
+    <input type="text" id="input" autofocus placeholder="输入值...">
+
+    <div class="buttons">
+        <button class="cancel" id="cancelBtn" type="button">取消</button>
+        <button class="ok" id="submitBtn" type="button">确定</button>
+    </div>
+
+    <script src="prompt.js"></script>
+</body>
+
+</html>

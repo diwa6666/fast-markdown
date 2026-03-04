@@ -1,0 +1,63 @@
+{
+    "name": "fast-markdown",
+    "version": "1.0.1",
+    "description": "本地 Markdown 编辑器，支持运行 Python 代码",
+    "main": "src/main/main.js",
+    "scripts": {
+        "start": "electron .",
+        "check": "node --check src/main/main.js && node --check src/main/preload.js && node --check src/main/prompt-preload.js && node --check src/renderer/renderer.js && node --check src/renderer/prompt.js",
+        "prepare:update-config": "node scripts/ensure-update-config.js",
+        "build": "npm run prepare:update-config && electron-builder",
+        "build:win": "npm run prepare:update-config && electron-builder --win"
+    },
+    "author": "Your Name",
+    "license": "MIT",
+    "devDependencies": {
+        "electron": "^28.0.0",
+        "electron-builder": "^24.9.1",
+        "png-to-ico": "^3.0.1"
+    },
+    "dependencies": {
+        "electron-updater": "^6.8.3",
+        "highlight.js": "^11.9.0",
+        "marked": "^11.1.1"
+    },
+    "build": {
+        "appId": "com.fastmarkdown.app",
+        "productName": "FastMarkdown",
+        "files": [
+            "src/**/*",
+            "assets/**/*",
+            "package.json"
+        ],
+        "extraResources": [
+            {
+                "from": "update-config.json",
+                "to": "update-config.json"
+            }
+        ],
+        "win": {
+            "target": "nsis",
+            "icon": "assets/icon.ico"
+        },
+        "fileAssociations": [
+            {
+                "ext": "md",
+                "name": "Markdown File",
+                "description": "Markdown Document",
+                "role": "Editor"
+            },
+            {
+                "ext": "markdown",
+                "name": "Markdown File",
+                "description": "Markdown Document",
+                "role": "Editor"
+            }
+        ],
+        "nsis": {
+            "oneClick": false,
+            "perMachine": true,
+            "allowToChangeInstallationDirectory": true
+        }
+    }
+}

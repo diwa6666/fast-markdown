@@ -1,0 +1,7 @@
+{
+    "enabled": false,
+    "provider": "generic",
+    "url": "https://your-domain.com/fast-markdown-updates/",
+    "channel": "latest",
+    "autoDownload": false
+}

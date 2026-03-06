@@ -5,6 +5,7 @@
 ## 功能特点
 
 - 📝 实时 Markdown 预览（含代码高亮）
+- ∑ 支持 MathJax 数学公式渲染（行内 `$...$` / 块级 `$$...$$`）
 - 🐍 Python 代码块一键运行（支持 `input()` 弹窗输入）
 - 🌓 深色/浅色主题切换
 - 📂 打开与保存 `.md/.markdown` 文件
@@ -74,12 +75,6 @@ cp update-config.example.json update-config.json
 
 > 开发模式（`npm start`）下不会执行自动更新。
 
-## 开源发布建议
-
-- 需要上传：`src/`、`assets/`、`package.json`、`package-lock.json`、`README.md`、`LICENSE`、`.gitignore`、`.editorconfig`、`update-config.example.json`
-- 不要上传：`node_modules/`、`dist/`、`update-config.json`
-- Windows 安装包请发布到 GitHub Releases，而不是直接提交到仓库
-
 ## 使用说明
 
 在 Markdown 中使用 Python 代码块：
@@ -91,6 +86,17 @@ for i in range(5):
 ```
 
 预览区会显示“运行”按钮，点击即可执行。
+
+数学公式示例：
+
+```markdown
+行内公式：$E = mc^2$
+
+块级公式：
+$$
+\int_0^1 x^2 \, dx = \frac{1}{3}
+$$
+```
 
 ## 快捷键
 

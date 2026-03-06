@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: http: https:; object-src 'none'; base-uri 'none'; form-action 'none';">
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http: https:; object-src 'none'; base-uri 'none'; form-action 'none';">
     <title>Fast Markdown</title>
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -125,6 +125,8 @@
 • 代码块：```python
 • 列表：- 或 1.
 • 链接：[文字](url)
+• 行内公式：$E=mc^2$
+• 块公式：$$\\int_0^1 x^2 dx$$
 
 Python 代码块示例：
 ```python
@@ -189,6 +191,8 @@ print('Hello, World!')
         <div class="loading-text">正在执行 Python 代码...</div>
     </div>
 
+    <script src="mathjax-config.js"></script>
+    <script src="../../node_modules/mathjax/es5/tex-mml-chtml.js"></script>
     <script src="renderer.js"></script>
 </body>
 

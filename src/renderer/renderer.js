@@ -6,6 +6,8 @@ let currentView = 'split';
 let isDarkTheme = true;
 let currentLineCount = 1;
 let previewDebounceTimer = null;
+let pendingMathTypeset = false;
+let isMathTypesetting = false;
 
 const ipcUnsubscribers = [];
 
@@ -192,6 +194,49 @@ function updatePreview() {
             runPythonCode(button.dataset.code || '');
         });
     });
+
+    requestMathTypeset();
+}
+
+function requestMathTypeset() {
+    if (!window.MathJax) {
+        return;
+    }
+
+    pendingMathTypeset = true;
+    flushMathTypesetQueue();
+}
+
+function flushMathTypesetQueue() {
+    if (!pendingMathTypeset || isMathTypesetting || !window.MathJax) {
+        return;
+    }
+
+    const mathJax = window.MathJax;
+    if (!mathJax.startup || !mathJax.startup.promise || typeof mathJax.typesetPromise !== 'function') {
+        return;
+    }
+
+    pendingMathTypeset = false;
+    isMathTypesetting = true;
+
+    mathJax.startup.promise
+        .then(() => {
+            if (typeof mathJax.typesetClear === 'function') {
+                mathJax.typesetClear([preview]);
+            }
+
+            return mathJax.typesetPromise([preview]);
+        })
+        .catch((error) => {
+            console.error('MathJax 渲染失败:', error);
+        })
+        .finally(() => {
+            isMathTypesetting = false;
+            if (pendingMathTypeset) {
+                flushMathTypesetQueue();
+            }
+        });
 }
 
 function escapeHtml(text) {

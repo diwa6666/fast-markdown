@@ -1,6 +1,6 @@
 {
     "name": "fast-markdown",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "本地 Markdown 编辑器，支持运行 Python 代码",
     "main": "src/main/main.js",
     "scripts": {
@@ -20,7 +20,8 @@
     "dependencies": {
         "electron-updater": "^6.8.3",
         "highlight.js": "^11.9.0",
-        "marked": "^11.1.1"
+        "marked": "^11.1.1",
+        "mathjax": "^3.2.2"
     },
     "build": {
         "appId": "com.fastmarkdown.app",

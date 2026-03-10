@@ -26,6 +26,7 @@ const pythonOutput = document.getElementById('pythonOutput');
 const pythonError = document.getElementById('pythonError');
 const errorSection = document.getElementById('errorSection');
 const loadingOverlay = document.getElementById('loadingOverlay');
+const loadingText = document.getElementById('loadingText');
 const updateBanner = document.getElementById('updateBanner');
 const updateBannerText = document.getElementById('updateBannerText');
 const updateActionBtn = document.getElementById('updateActionBtn');
@@ -57,6 +58,7 @@ function setupEventListeners() {
     document.getElementById('newFileBtn').addEventListener('click', newFile);
     document.getElementById('openFileBtn').addEventListener('click', openFile);
     document.getElementById('saveBtn').addEventListener('click', saveFile);
+    document.getElementById('exportPdfBtn').addEventListener('click', exportPdf);
     document.getElementById('themeToggle').addEventListener('click', toggleTheme);
 
     document.querySelectorAll('.view-btn').forEach((btn) => {
@@ -87,6 +89,7 @@ function setupEventListeners() {
         ipcUnsubscribers.push(window.electronAPI.onMenuNewFile(newFile));
         ipcUnsubscribers.push(window.electronAPI.onMenuSave(saveFile));
         ipcUnsubscribers.push(window.electronAPI.onMenuSaveAs(saveFileAs));
+        ipcUnsubscribers.push(window.electronAPI.onMenuExportPdf(exportPdf));
         ipcUnsubscribers.push(window.electronAPI.onChangeView(setView));
         ipcUnsubscribers.push(window.electronAPI.onToggleTheme(toggleTheme));
         ipcUnsubscribers.push(window.electronAPI.onMainRequestSave(handleMainSaveRequest));
@@ -136,6 +139,12 @@ function handleGlobalKeydown(event) {
     if (lowerKey === 's') {
         event.preventDefault();
         saveFile();
+        return;
+    }
+
+    if (lowerKey === 'e' && event.shiftKey) {
+        event.preventDefault();
+        exportPdf();
     }
 }
 
@@ -390,7 +399,7 @@ async function runPythonCode(code) {
         return;
     }
 
-    showLoading(true);
+    showLoading(true, '正在执行 Python 代码...');
 
     try {
         const result = await window.electronAPI.runPython(code);
@@ -438,7 +447,11 @@ function copyOutput() {
     });
 }
 
-function showLoading(show) {
+function showLoading(show, message = '正在执行 Python 代码...') {
+    if (loadingText) {
+        loadingText.textContent = message;
+    }
+
     loadingOverlay.classList.toggle('active', show);
 }
 
@@ -595,6 +608,62 @@ async function saveFileAs() {
     }
 
     return result;
+}
+
+async function ensureMathTypesetForExport() {
+    if (!window.MathJax) {
+        return;
+    }
+
+    const mathJax = window.MathJax;
+    if (!mathJax.startup || !mathJax.startup.promise || typeof mathJax.typesetPromise !== 'function') {
+        return;
+    }
+
+    await mathJax.startup.promise.catch(() => undefined);
+
+    if (typeof mathJax.typesetClear === 'function') {
+        mathJax.typesetClear([preview]);
+    }
+
+    await mathJax.typesetPromise([preview]).catch((error) => {
+        console.error('导出前 MathJax 渲染失败:', error);
+    });
+}
+
+window.preparePdfExport = async () => {
+    await ensureMathTypesetForExport();
+    return true;
+};
+
+async function exportPdf() {
+    if (!window.electronAPI) {
+        return { success: false };
+    }
+
+    showLoading(true, '正在导出 PDF...');
+
+    try {
+        await ensureMathTypesetForExport();
+
+        const result = await window.electronAPI.exportPdf({
+            suggestedName: currentFileName.textContent || '未命名文档'
+        });
+
+        showLoading(false);
+
+        if (result.success) {
+            showUpdateBanner(`PDF 导出成功：${result.name}`, { autoHideMs: 4000 });
+        } else if (!result.cancelled) {
+            showUpdateBanner(`PDF 导出失败：${result.error || '未知错误'}`, { autoHideMs: 5000 });
+        }
+
+        return result;
+    } catch (error) {
+        showLoading(false);
+        showUpdateBanner(`PDF 导出失败：${error.message}`, { autoHideMs: 5000 });
+        return { success: false, error: error.message };
+    }
 }
 
 function setModified(modified) {

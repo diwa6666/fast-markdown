@@ -48,6 +48,16 @@ function getRendererPath(...segments) {
     return path.join(__dirname, '..', 'renderer', ...segments);
 }
 
+function getDefaultPdfPath(suggestedName = '未命名文档') {
+    if (currentFilePath) {
+        const parsed = path.parse(currentFilePath);
+        return path.join(parsed.dir, `${parsed.name}.pdf`);
+    }
+
+    const baseName = path.parse(String(suggestedName || '未命名文档')).name || '未命名文档';
+    return path.join(app.getPath('documents'), `${baseName}.pdf`);
+}
+
 function sendUpdaterStatus(payload) {
     if (!mainWindow || mainWindow.isDestroyed()) {
         return;
@@ -439,6 +449,53 @@ async function openFileDialog() {
     return openFile(result.filePaths[0]);
 }
 
+async function exportPdf(payload) {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+        return { success: false, error: '主窗口不可用' };
+    }
+
+    const suggestedName = String(payload?.suggestedName || path.basename(currentFilePath || '未命名文档'));
+
+    try {
+        const result = await dialog.showSaveDialog(mainWindow, {
+            title: '导出 PDF',
+            buttonLabel: '导出',
+            defaultPath: getDefaultPdfPath(suggestedName),
+            filters: [{ name: 'PDF Files', extensions: ['pdf'] }]
+        });
+
+        if (result.canceled || !result.filePath) {
+            return { success: false, cancelled: true };
+        }
+
+        await mainWindow.webContents.executeJavaScript(
+            'window.preparePdfExport ? window.preparePdfExport() : Promise.resolve(true)',
+            true
+        ).catch(() => undefined);
+        await mainWindow.webContents.executeJavaScript(
+            'document.fonts && document.fonts.ready ? document.fonts.ready.then(() => true) : Promise.resolve(true)',
+            true
+        ).catch(() => undefined);
+
+        const pdfData = await mainWindow.webContents.printToPDF({
+            printBackground: true,
+            pageSize: 'A4',
+            marginsType: 1,
+            preferCSSPageSize: true
+        });
+
+        await fs.writeFile(result.filePath, pdfData);
+        return {
+            success: true,
+            path: result.filePath,
+            name: path.basename(result.filePath)
+        };
+    } catch (err) {
+        dialog.showErrorBox('导出 PDF 失败', err.message);
+        return { success: false, error: err.message };
+    }
+}
+
 function parseInputPrompts(code) {
     const inputRegex = /input\s*\(\s*(?:(['"`])(.*?)\1)?\s*\)/g;
     const prompts = [];
@@ -700,6 +757,11 @@ function createMenu() {
                     accelerator: 'CmdOrCtrl+Shift+S',
                     click: () => mainWindow.webContents.send('menu-save-as')
                 },
+                {
+                    label: '导出 PDF',
+                    accelerator: 'CmdOrCtrl+Shift+E',
+                    click: () => mainWindow.webContents.send('menu-export-pdf')
+                },
                 { type: 'separator' },
                 {
                     label: '退出',
@@ -847,6 +909,8 @@ function registerIpcHandlers() {
             return { success: false, error: err.message };
         }
     });
+
+    ipcMain.handle('export-pdf', async (_event, payload) => exportPdf(payload));
 
     ipcMain.handle('run-python', async (_event, code) => {
         if (typeof code !== 'string') {

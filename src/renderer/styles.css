@@ -1040,3 +1040,64 @@ body {
         display: none;
     }
 }
+
+/* ===== Print / PDF Export ===== */
+@page {
+    size: A4;
+    margin: 16mm;
+}
+
+@media print {
+    html,
+    body {
+        height: auto !important;
+        overflow: visible !important;
+        background: #fff !important;
+    }
+
+    .sidebar,
+    .toolbar,
+    .update-banner,
+    .resizer,
+    .pane-header,
+    .editor-pane,
+    .loading-overlay,
+    .modal-overlay {
+        display: none !important;
+    }
+
+    .app-container,
+    .main-content,
+    .editor-container,
+    .preview-pane {
+        display: block !important;
+        height: auto !important;
+        width: 100% !important;
+        overflow: visible !important;
+        background: #fff !important;
+    }
+
+    .preview-content {
+        height: auto !important;
+        overflow: visible !important;
+        padding: 0 !important;
+        background: #fff !important;
+    }
+
+    .markdown-body {
+        color: #1f2328 !important;
+    }
+
+    .markdown-body a {
+        color: #0969da !important;
+    }
+
+    .code-block-header,
+    .run-python-btn {
+        display: none !important;
+    }
+
+    .code-block-wrapper {
+        border: 1px solid #d0d7de !important;
+    }
+}

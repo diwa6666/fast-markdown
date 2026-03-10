@@ -79,6 +79,15 @@
                             <polyline points="7 3 7 8 15 8" />
                         </svg>
                     </button>
+                    <button class="btn btn-icon" id="exportPdfBtn" title="导出 PDF (Ctrl+Shift+E)">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+                            <polyline points="14 2 14 8 20 8" />
+                            <path d="M8 14h8" />
+                            <path d="M8 18h6" />
+                        </svg>
+                    </button>
                     <button class="btn btn-icon" id="themeToggle" title="切换主题 (Ctrl+T)">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2" class="sun-icon">
@@ -188,7 +197,7 @@ print('Hello, World!')
     <!-- Loading Overlay -->
     <div class="loading-overlay" id="loadingOverlay">
         <div class="loading-spinner"></div>
-        <div class="loading-text">正在执行 Python 代码...</div>
+        <div class="loading-text" id="loadingText">正在执行 Python 代码...</div>
     </div>
 
     <script src="mathjax-config.js"></script>

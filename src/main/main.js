@@ -15,11 +15,8 @@ const UPDATE_CHANNEL = 'updater-status';
 const AUTO_UPDATE_CHECK_DELAY_MS = 5_000;
 
 let mainWindow = null;
-let currentFilePath = null;
-let isDocumentDirty = false;
-let forceClosing = false;
-let closeInProgress = false;
-let pendingMacOpenFile = null;
+const windowStates = new Map();
+let pendingMacOpenFiles = [];
 let saveRequestId = 0;
 const pendingSaveRequests = new Map();
 let updaterEnabled = false;
@@ -48,9 +45,60 @@ function getRendererPath(...segments) {
     return path.join(__dirname, '..', 'renderer', ...segments);
 }
 
-function getDefaultPdfPath(suggestedName = '未命名文档') {
-    if (currentFilePath) {
-        const parsed = path.parse(currentFilePath);
+function createWindowState() {
+    return {
+        filePath: null,
+        isDocumentDirty: false,
+        forceClosing: false,
+        closeInProgress: false
+    };
+}
+
+function getWindowState(window) {
+    if (!window || window.isDestroyed()) {
+        return null;
+    }
+
+    if (!windowStates.has(window.id)) {
+        windowStates.set(window.id, createWindowState());
+    }
+
+    return windowStates.get(window.id);
+}
+
+function getOpenWindows() {
+    return BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
+}
+
+function getPrimaryWindow() {
+    const focusedWindow = BrowserWindow.getFocusedWindow();
+    if (focusedWindow && !focusedWindow.isDestroyed()) {
+        return focusedWindow;
+    }
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        return mainWindow;
+    }
+
+    return getOpenWindows()[0] || null;
+}
+
+function getReusableWindow() {
+    return getOpenWindows().find((window) => {
+        const state = getWindowState(window);
+        return state && !state.filePath && !state.isDocumentDirty;
+    }) || null;
+}
+
+function shouldOpenFileInNewWindow(window) {
+    const state = getWindowState(window);
+    return Boolean(state && (state.filePath || state.isDocumentDirty));
+}
+
+function getDefaultPdfPath(window, suggestedName = '未命名文档') {
+    const filePath = getWindowState(window)?.filePath;
+    if (filePath) {
+        const parsed = path.parse(filePath);
         return path.join(parsed.dir, `${parsed.name}.pdf`);
     }
 
@@ -58,12 +106,18 @@ function getDefaultPdfPath(suggestedName = '未命名文档') {
     return path.join(app.getPath('documents'), `${baseName}.pdf`);
 }
 
-function sendUpdaterStatus(payload) {
-    if (!mainWindow || mainWindow.isDestroyed()) {
+function sendUpdaterStatus(payload, targetWindow = null) {
+    const windows = targetWindow
+        ? [targetWindow]
+        : getOpenWindows();
+
+    if (windows.length === 0) {
         return;
     }
 
-    mainWindow.webContents.send(UPDATE_CHANNEL, payload);
+    windows.forEach((window) => {
+        window.webContents.send(UPDATE_CHANNEL, payload);
+    });
 }
 
 function getUpdateConfigPath() {
@@ -189,12 +243,12 @@ async function installDownloadedUpdate() {
         return { success: false };
     }
 
-    const canClose = await ensureNoUnsavedChanges('close');
+    const canClose = await ensureAllWindowsCanClose();
     if (!canClose) {
         return { success: false, cancelled: true };
     }
 
-    forceClosing = true;
+    markAllWindowsForceClosing();
     setImmediate(() => {
         autoUpdater.quitAndInstall(false, true);
     });
@@ -298,17 +352,17 @@ function setupAutoUpdater() {
     updaterEnabled = true;
 }
 
-function setWindowTitle(filePath = null) {
-    if (!mainWindow || mainWindow.isDestroyed()) {
+function setWindowTitle(window, filePath = null) {
+    if (!window || window.isDestroyed()) {
         return;
     }
 
     if (!filePath) {
-        mainWindow.setTitle(APP_TITLE);
+        window.setTitle(APP_TITLE);
         return;
     }
 
-    mainWindow.setTitle(`${APP_TITLE} - ${path.basename(filePath)}`);
+    window.setTitle(`${APP_TITLE} - ${path.basename(filePath)}`);
 }
 
 function isSafeExternalUrl(rawUrl) {
@@ -342,8 +396,8 @@ function setupNavigationGuards(window) {
     });
 }
 
-async function requestRendererSave() {
-    if (!mainWindow || mainWindow.isDestroyed()) {
+async function requestRendererSave(window) {
+    if (!window || window.isDestroyed()) {
         return false;
     }
 
@@ -360,12 +414,13 @@ async function requestRendererSave() {
             resolve(Boolean(success));
         });
 
-        mainWindow.webContents.send('main-request-save', { requestId });
+        window.webContents.send('main-request-save', { requestId });
     });
 }
 
-async function ensureNoUnsavedChanges(action) {
-    if (!isDocumentDirty) {
+async function ensureNoUnsavedChanges(window, action) {
+    const state = getWindowState(window);
+    if (!state || !state.isDocumentDirty) {
         return true;
     }
 
@@ -373,7 +428,7 @@ async function ensureNoUnsavedChanges(action) {
         ? '当前文档有未保存更改。是否先保存再退出？'
         : '当前文档有未保存更改。是否先保存再继续？';
 
-    const choice = dialog.showMessageBoxSync(mainWindow, {
+    const choice = dialog.showMessageBoxSync(window, {
         type: 'warning',
         buttons: ['保存', '不保存', '取消'],
         defaultId: 0,
@@ -385,25 +440,48 @@ async function ensureNoUnsavedChanges(action) {
     });
 
     if (choice === 0) {
-        return requestRendererSave();
+        return requestRendererSave(window);
     }
 
     return choice === 1;
 }
 
-async function openFile(filePath) {
+async function ensureAllWindowsCanClose() {
+    for (const window of getOpenWindows()) {
+        const canClose = await ensureNoUnsavedChanges(window, 'close');
+        if (!canClose) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function markAllWindowsForceClosing() {
+    getOpenWindows().forEach((window) => {
+        const state = getWindowState(window);
+        if (state) {
+            state.forceClosing = true;
+        }
+    });
+}
+
+async function openFileInWindow(window, filePath) {
     try {
         const content = await fs.readFile(filePath, 'utf-8');
-        currentFilePath = filePath;
-        isDocumentDirty = false;
+        const state = getWindowState(window);
+        if (state) {
+            state.filePath = filePath;
+            state.isDocumentDirty = false;
+        }
 
-        if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('file-opened', {
+        if (window && !window.isDestroyed()) {
+            window.webContents.send('file-opened', {
                 path: filePath,
                 name: path.basename(filePath),
                 content
             });
-            setWindowTitle(filePath);
+            setWindowTitle(window, filePath);
         }
 
         return { success: true };
@@ -413,28 +491,27 @@ async function openFile(filePath) {
     }
 }
 
-async function openFileWithGuard(filePath, skipDirtyCheck = false) {
+async function openFileWithGuard(window, filePath, skipDirtyCheck = false) {
     if (!filePath || !fsSync.existsSync(filePath)) {
         return { success: false, error: '文件不存在' };
     }
 
     if (!skipDirtyCheck) {
-        const canProceed = await ensureNoUnsavedChanges('open');
+        const canProceed = await ensureNoUnsavedChanges(window, 'open');
         if (!canProceed) {
             return { success: false, cancelled: true };
         }
     }
 
-    return openFile(filePath);
+    return openFileInWindow(window, filePath);
 }
 
-async function openFileDialog() {
-    const canProceed = await ensureNoUnsavedChanges('open');
-    if (!canProceed) {
-        return { success: false, cancelled: true };
+async function openFileDialog(window) {
+    if (!window || window.isDestroyed()) {
+        return { success: false, error: '窗口不可用' };
     }
 
-    const result = await dialog.showOpenDialog(mainWindow, {
+    const result = await dialog.showOpenDialog(window, {
         properties: ['openFile'],
         filters: [
             { name: 'Markdown Files', extensions: ['md', 'markdown'] },
@@ -446,21 +523,28 @@ async function openFileDialog() {
         return { success: false, cancelled: true };
     }
 
-    return openFile(result.filePaths[0]);
+    const [filePath] = result.filePaths;
+    if (shouldOpenFileInNewWindow(window)) {
+        createWindow(filePath);
+        return { success: true, path: filePath, openedInNewWindow: true };
+    }
+
+    return openFileInWindow(window, filePath);
 }
 
-async function exportPdf(payload) {
-    if (!mainWindow || mainWindow.isDestroyed()) {
+async function exportPdf(window, payload) {
+    if (!window || window.isDestroyed()) {
         return { success: false, error: '主窗口不可用' };
     }
 
+    const currentFilePath = getWindowState(window)?.filePath;
     const suggestedName = String(payload?.suggestedName || path.basename(currentFilePath || '未命名文档'));
 
     try {
-        const result = await dialog.showSaveDialog(mainWindow, {
+        const result = await dialog.showSaveDialog(window, {
             title: '导出 PDF',
             buttonLabel: '导出',
-            defaultPath: getDefaultPdfPath(suggestedName),
+            defaultPath: getDefaultPdfPath(window, suggestedName),
             filters: [{ name: 'PDF Files', extensions: ['pdf'] }]
         });
 
@@ -468,16 +552,16 @@ async function exportPdf(payload) {
             return { success: false, cancelled: true };
         }
 
-        await mainWindow.webContents.executeJavaScript(
+        await window.webContents.executeJavaScript(
             'window.preparePdfExport ? window.preparePdfExport() : Promise.resolve(true)',
             true
         ).catch(() => undefined);
-        await mainWindow.webContents.executeJavaScript(
+        await window.webContents.executeJavaScript(
             'document.fonts && document.fonts.ready ? document.fonts.ready.then(() => true) : Promise.resolve(true)',
             true
         ).catch(() => undefined);
 
-        const pdfData = await mainWindow.webContents.printToPDF({
+        const pdfData = await window.webContents.printToPDF({
             printBackground: true,
             pageSize: 'A4',
             marginsType: 1,
@@ -508,7 +592,7 @@ function parseInputPrompts(code) {
     return prompts;
 }
 
-async function collectPythonInputs(code) {
+async function collectPythonInputs(code, parentWindow) {
     const prompts = parseInputPrompts(code);
     if (prompts.length === 0) {
         return { cancelled: false, values: [] };
@@ -516,7 +600,7 @@ async function collectPythonInputs(code) {
 
     const values = [];
     for (const prompt of prompts) {
-        const response = await showInputDialog(prompt);
+        const response = await showInputDialog(prompt, parentWindow);
         if (response.cancelled) {
             return { cancelled: true, values: [] };
         }
@@ -643,8 +727,8 @@ function runPythonProcess(command, args) {
     });
 }
 
-async function runPythonCode(code) {
-    const inputResult = await collectPythonInputs(code);
+async function runPythonCode(code, parentWindow) {
+    const inputResult = await collectPythonInputs(code, parentWindow);
     if (inputResult.cancelled) {
         return { success: false, output: '', error: '用户取消了输入', exitCode: -1 };
     }
@@ -669,14 +753,14 @@ async function runPythonCode(code) {
     return fallbackResult;
 }
 
-function showInputDialog(prompt) {
+function showInputDialog(prompt, parentWindow) {
     return new Promise((resolve) => {
         const promptRequestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
         const promptWindow = new BrowserWindow({
             width: 420,
             height: 220,
-            parent: mainWindow,
+            parent: parentWindow && !parentWindow.isDestroyed() ? parentWindow : undefined,
             modal: true,
             resizable: false,
             minimizable: false,
@@ -733,6 +817,13 @@ function showInputDialog(prompt) {
 }
 
 function createMenu() {
+    const sendToFocusedWindow = (channel, payload) => {
+        const targetWindow = getPrimaryWindow();
+        if (targetWindow && !targetWindow.isDestroyed()) {
+            targetWindow.webContents.send(channel, payload);
+        }
+    };
+
     const template = [
         {
             label: '文件',
@@ -740,39 +831,45 @@ function createMenu() {
                 {
                     label: '新建',
                     accelerator: 'CmdOrCtrl+N',
-                    click: () => mainWindow.webContents.send('menu-new-file')
+                    click: () => sendToFocusedWindow('menu-new-file')
+                },
+                {
+                    label: '新建窗口',
+                    accelerator: 'CmdOrCtrl+Shift+N',
+                    click: () => createWindow()
                 },
                 {
                     label: '打开',
                     accelerator: 'CmdOrCtrl+O',
-                    click: () => openFileDialog()
+                    click: () => {
+                        const targetWindow = getPrimaryWindow();
+                        if (targetWindow) {
+                            openFileDialog(targetWindow);
+                        } else {
+                            createWindow();
+                        }
+                    }
                 },
                 {
                     label: '保存',
                     accelerator: 'CmdOrCtrl+S',
-                    click: () => mainWindow.webContents.send('menu-save')
+                    click: () => sendToFocusedWindow('menu-save')
                 },
                 {
                     label: '另存为',
                     accelerator: 'CmdOrCtrl+Shift+S',
-                    click: () => mainWindow.webContents.send('menu-save-as')
+                    click: () => sendToFocusedWindow('menu-save-as')
                 },
                 {
                     label: '导出 PDF',
                     accelerator: 'CmdOrCtrl+Shift+E',
-                    click: () => mainWindow.webContents.send('menu-export-pdf')
+                    click: () => sendToFocusedWindow('menu-export-pdf')
                 },
                 { type: 'separator' },
                 {
                     label: '退出',
                     accelerator: 'CmdOrCtrl+Q',
-                    click: async () => {
-                        const canClose = await ensureNoUnsavedChanges('close');
-                        if (canClose) {
-                            forceClosing = true;
-                            app.quit();
-                        }
-                    }
+                    click: () => app.quit()
                 }
             ]
         },
@@ -794,23 +891,23 @@ function createMenu() {
                 {
                     label: '分屏视图',
                     accelerator: 'CmdOrCtrl+1',
-                    click: () => mainWindow.webContents.send('change-view', 'split')
+                    click: () => sendToFocusedWindow('change-view', 'split')
                 },
                 {
                     label: '仅编辑器',
                     accelerator: 'CmdOrCtrl+2',
-                    click: () => mainWindow.webContents.send('change-view', 'editor')
+                    click: () => sendToFocusedWindow('change-view', 'editor')
                 },
                 {
                     label: '仅预览',
                     accelerator: 'CmdOrCtrl+3',
-                    click: () => mainWindow.webContents.send('change-view', 'preview')
+                    click: () => sendToFocusedWindow('change-view', 'preview')
                 },
                 { type: 'separator' },
                 {
                     label: '切换主题',
                     accelerator: 'CmdOrCtrl+T',
-                    click: () => mainWindow.webContents.send('toggle-theme')
+                    click: () => sendToFocusedWindow('toggle-theme')
                 },
                 { type: 'separator' },
                 { label: '开发者工具', accelerator: 'F12', role: 'toggleDevTools' }
@@ -841,12 +938,19 @@ function createMenu() {
                 {
                     label: '关于',
                     click: () => {
-                        dialog.showMessageBox(mainWindow, {
+                        const targetWindow = getPrimaryWindow();
+                        const options = {
                             type: 'info',
                             title: '关于 Fast Markdown',
                             message: APP_TITLE,
                             detail: `版本 ${app.getVersion()}\n一个支持运行 Python 代码的本地 Markdown 编辑器`
-                        });
+                        };
+
+                        if (targetWindow) {
+                            dialog.showMessageBox(targetWindow, options);
+                        } else {
+                            dialog.showMessageBox(options);
+                        }
                     }
                 }
             ]
@@ -858,15 +962,20 @@ function createMenu() {
 }
 
 function registerIpcHandlers() {
-    ipcMain.handle('open-file-dialog', async () => openFileDialog());
+    ipcMain.handle('open-file-dialog', async (event) => {
+        const window = BrowserWindow.fromWebContents(event.sender);
+        return openFileDialog(window);
+    });
 
-    ipcMain.handle('save-file', async (_event, payload) => {
+    ipcMain.handle('save-file', async (event, payload) => {
         try {
+            const window = BrowserWindow.fromWebContents(event.sender);
+            const state = getWindowState(window);
             const { content, filePath } = payload;
-            let savePath = filePath || currentFilePath;
+            let savePath = filePath || state?.filePath || null;
 
             if (!savePath) {
-                const result = await dialog.showSaveDialog(mainWindow, {
+                const result = await dialog.showSaveDialog(window, {
                     filters: [{ name: 'Markdown Files', extensions: ['md'] }]
                 });
 
@@ -878,9 +987,11 @@ function registerIpcHandlers() {
             }
 
             await fs.writeFile(savePath, content, 'utf-8');
-            currentFilePath = savePath;
-            isDocumentDirty = false;
-            setWindowTitle(savePath);
+            if (state) {
+                state.filePath = savePath;
+                state.isDocumentDirty = false;
+            }
+            setWindowTitle(window, savePath);
             return { success: true, path: savePath, name: path.basename(savePath) };
         } catch (err) {
             dialog.showErrorBox('保存文件失败', err.message);
@@ -888,10 +999,12 @@ function registerIpcHandlers() {
         }
     });
 
-    ipcMain.handle('save-file-as', async (_event, payload) => {
+    ipcMain.handle('save-file-as', async (event, payload) => {
         try {
+            const window = BrowserWindow.fromWebContents(event.sender);
+            const state = getWindowState(window);
             const { content } = payload;
-            const result = await dialog.showSaveDialog(mainWindow, {
+            const result = await dialog.showSaveDialog(window, {
                 filters: [{ name: 'Markdown Files', extensions: ['md'] }]
             });
 
@@ -900,9 +1013,11 @@ function registerIpcHandlers() {
             }
 
             await fs.writeFile(result.filePath, content, 'utf-8');
-            currentFilePath = result.filePath;
-            isDocumentDirty = false;
-            setWindowTitle(result.filePath);
+            if (state) {
+                state.filePath = result.filePath;
+                state.isDocumentDirty = false;
+            }
+            setWindowTitle(window, result.filePath);
             return { success: true, path: result.filePath, name: path.basename(result.filePath) };
         } catch (err) {
             dialog.showErrorBox('保存文件失败', err.message);
@@ -910,17 +1025,24 @@ function registerIpcHandlers() {
         }
     });
 
-    ipcMain.handle('export-pdf', async (_event, payload) => exportPdf(payload));
+    ipcMain.handle('export-pdf', async (event, payload) => {
+        const window = BrowserWindow.fromWebContents(event.sender);
+        return exportPdf(window, payload);
+    });
 
-    ipcMain.handle('run-python', async (_event, code) => {
+    ipcMain.handle('run-python', async (event, code) => {
         if (typeof code !== 'string') {
             return { success: false, output: '', error: '代码格式无效', exitCode: -1 };
         }
 
-        return runPythonCode(code);
+        const window = BrowserWindow.fromWebContents(event.sender);
+        return runPythonCode(code, window);
     });
 
-    ipcMain.handle('get-current-file', () => currentFilePath);
+    ipcMain.handle('get-current-file', (event) => {
+        const window = BrowserWindow.fromWebContents(event.sender);
+        return getWindowState(window)?.filePath || null;
+    });
     ipcMain.handle('check-for-updates', async (_event, payload) => {
         const manual = Boolean(payload && payload.manual);
         return checkForUpdates(manual);
@@ -928,8 +1050,12 @@ function registerIpcHandlers() {
     ipcMain.handle('download-update', async () => downloadUpdate());
     ipcMain.handle('install-update', async () => installDownloadedUpdate());
 
-    ipcMain.on('document-dirty-state', (_event, dirty) => {
-        isDocumentDirty = Boolean(dirty);
+    ipcMain.on('document-dirty-state', (event, dirty) => {
+        const window = BrowserWindow.fromWebContents(event.sender);
+        const state = getWindowState(window);
+        if (state) {
+            state.isDocumentDirty = Boolean(dirty);
+        }
     });
 
     ipcMain.on('renderer-save-response', (_event, payload) => {
@@ -943,8 +1069,8 @@ function registerIpcHandlers() {
     });
 }
 
-function createWindow() {
-    mainWindow = new BrowserWindow({
+function createWindow(initialFilePath = null) {
+    const window = new BrowserWindow({
         width: 1400,
         height: 900,
         minWidth: 800,
@@ -964,61 +1090,62 @@ function createWindow() {
         backgroundColor: '#1a1a2e'
     });
 
-    setupNavigationGuards(mainWindow);
-    setWindowTitle();
+    mainWindow = window;
+    getWindowState(window);
+    setupNavigationGuards(window);
+    setWindowTitle(window);
 
-    mainWindow.on('close', (event) => {
-        if (forceClosing || !isDocumentDirty) {
+    window.on('focus', () => {
+        mainWindow = window;
+    });
+
+    window.on('close', (event) => {
+        const state = getWindowState(window);
+        if (!state || state.forceClosing || !state.isDocumentDirty) {
             return;
         }
 
         event.preventDefault();
 
-        if (closeInProgress) {
+        if (state.closeInProgress) {
             return;
         }
 
-        closeInProgress = true;
-        ensureNoUnsavedChanges('close').then((canClose) => {
-            if (canClose && mainWindow && !mainWindow.isDestroyed()) {
-                forceClosing = true;
-                mainWindow.close();
+        state.closeInProgress = true;
+        ensureNoUnsavedChanges(window, 'close').then((canClose) => {
+            if (canClose && !window.isDestroyed()) {
+                state.forceClosing = true;
+                window.close();
             }
         }).finally(() => {
-            closeInProgress = false;
+            state.closeInProgress = false;
         });
     });
 
-    mainWindow.on('closed', () => {
-        mainWindow = null;
+    window.on('closed', () => {
+        windowStates.delete(window.id);
+        if (mainWindow === window) {
+            mainWindow = getPrimaryWindow();
+        }
     });
 
-    mainWindow.loadFile(getRendererPath('index.html'));
+    window.loadFile(getRendererPath('index.html'));
 
-    mainWindow.webContents.once('did-finish-load', () => {
+    window.webContents.once('did-finish-load', () => {
         if (updateReadyToInstall) {
             sendUpdaterStatus({
                 type: 'downloaded',
                 message: '更新已下载完成，可安装并重启。'
-            });
+            }, window);
+        }
+
+        if (initialFilePath) {
+            openFileInWindow(window, initialFilePath);
         }
     });
 
-    const startupFile = resolveMarkdownPathFromArgs(process.argv.slice(1));
-    if (startupFile) {
-        mainWindow.webContents.once('did-finish-load', () => {
-            openFileWithGuard(startupFile, true);
-        });
-    }
-
-    if (pendingMacOpenFile) {
-        mainWindow.webContents.once('did-finish-load', () => {
-            openFileWithGuard(pendingMacOpenFile, true);
-            pendingMacOpenFile = null;
-        });
-    }
-
     createMenu();
+    return window;
 }
 
 const gotTheLock = app.requestSingleInstanceLock();
@@ -1026,24 +1153,45 @@ if (!gotTheLock) {
     app.quit();
 } else {
     app.on('second-instance', (_event, commandLine) => {
-        if (!mainWindow) {
+        const filePath = resolveMarkdownPathFromArgs(commandLine);
+        if (filePath) {
+            const reusableWindow = getReusableWindow();
+            if (reusableWindow) {
+                if (reusableWindow.isMinimized()) {
+                    reusableWindow.restore();
+                }
+                reusableWindow.focus();
+                openFileInWindow(reusableWindow, filePath);
+            } else {
+                const newWindow = createWindow(filePath);
+                if (newWindow.isMinimized()) {
+                    newWindow.restore();
+                }
+                newWindow.focus();
+            }
             return;
         }
 
-        if (mainWindow.isMinimized()) {
-            mainWindow.restore();
+        const targetWindow = getPrimaryWindow();
+        if (!targetWindow) {
+            createWindow();
+            return;
         }
-        mainWindow.focus();
 
-        const filePath = resolveMarkdownPathFromArgs(commandLine);
-        if (filePath) {
-            openFileWithGuard(filePath);
+        if (targetWindow.isMinimized()) {
+            targetWindow.restore();
         }
+        targetWindow.focus();
     });
 
     app.whenReady().then(() => {
         registerIpcHandlers();
-        createWindow();
+        const startupFile = resolveMarkdownPathFromArgs(process.argv.slice(1)) || pendingMacOpenFiles.shift() || null;
+        createWindow(startupFile);
+        pendingMacOpenFiles.forEach((filePath) => {
+            createWindow(filePath);
+        });
+        pendingMacOpenFiles = [];
         setupAutoUpdater();
 
         setTimeout(() => {
@@ -1061,12 +1209,18 @@ if (!gotTheLock) {
 app.on('open-file', (event, filePath) => {
     event.preventDefault();
 
-    if (mainWindow) {
-        openFileWithGuard(filePath);
+    const reusableWindow = getReusableWindow();
+    if (reusableWindow) {
+        openFileInWindow(reusableWindow, filePath);
         return;
     }
 
-    pendingMacOpenFile = filePath;
+    if (app.isReady()) {
+        createWindow(filePath);
+        return;
+    }
+
+    pendingMacOpenFiles.push(filePath);
 });
 
 app.on('window-all-closed', () => {

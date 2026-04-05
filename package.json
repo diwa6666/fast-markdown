@@ -1,6 +1,6 @@
 {
     "name": "fast-markdown",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "description": "本地 Markdown 编辑器，支持运行 Python 代码",
     "main": "src/main/main.js",
     "scripts": {

@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http: https:; object-src 'none'; base-uri 'none'; form-action 'none';">
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: http: https:; object-src 'none'; base-uri 'none'; form-action 'none';">
     <title>Fast Markdown</title>
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -134,6 +134,7 @@
 • 代码块：```python
 • 列表：- 或 1.
 • 链接：[文字](url)
+• 图片：![说明](./images/demo.png)
 • 行内公式：$E=mc^2$
 • 块公式：$$\\int_0^1 x^2 dx$$
 

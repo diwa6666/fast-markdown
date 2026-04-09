@@ -1,3 +1,5 @@
+const path = require('path');
+const { pathToFileURL } = require('url');
 const { contextBridge, ipcRenderer } = require('electron');
 const { marked } = require('marked');
 const hljs = require('highlight.js');
@@ -13,13 +15,17 @@ function escapeHtml(text) {
 
 function sanitizeLink(url, options = {}) {
     const safeUrl = String(url || '').trim();
-    const { allowImageData = false } = options;
+    const { allowImageData = false, allowFile = false } = options;
 
     if (!safeUrl) {
         return '';
     }
 
     if (safeUrl.startsWith('#')) {
+        return safeUrl;
+    }
+
+    if (allowFile && isLocalFileReference(safeUrl)) {
         return safeUrl;
     }
 
@@ -39,6 +45,63 @@ function sanitizeLink(url, options = {}) {
 
     return '';
 }
+
+function isWindowsAbsolutePath(value) {
+    return /^[a-zA-Z]:[\\/]/.test(value);
+}
+
+function isUncPath(value) {
+    return /^\\\\[^\\]/.test(value);
+}
+
+function isPosixAbsolutePath(value) {
+    return value.startsWith('/');
+}
+
+function isLocalFileReference(value) {
+    return value.toLowerCase().startsWith('file://')
+        || isWindowsAbsolutePath(value)
+        || isUncPath(value)
+        || isPosixAbsolutePath(value);
+}
+
+function resolveMarkdownImageSource(href, baseFilePath) {
+    const safeHref = sanitizeLink(href, { allowImageData: true, allowFile: true });
+    if (!safeHref) {
+        return '';
+    }
+
+    const lowerSafeHref = safeHref.toLowerCase();
+    if (lowerSafeHref.startsWith('data:image/') || lowerSafeHref.startsWith('http://') || lowerSafeHref.startsWith('https://')) {
+        return safeHref;
+    }
+
+    if (lowerSafeHref.startsWith('file://')) {
+        try {
+            return new URL(safeHref).toString();
+        } catch {
+            return '';
+        }
+    }
+
+    try {
+        if (isWindowsAbsolutePath(safeHref) || isUncPath(safeHref) || isPosixAbsolutePath(safeHref)) {
+            return pathToFileURL(path.normalize(safeHref)).toString();
+        }
+
+        if (!baseFilePath) {
+            return safeHref;
+        }
+
+        return pathToFileURL(path.resolve(path.dirname(baseFilePath), safeHref)).toString();
+    } catch {
+        return '';
+    }
+}
+
+const markdownRenderContext = {
+    filePath: null
+};
 
 const markdownRenderer = new marked.Renderer();
 
@@ -79,7 +142,7 @@ markdownRenderer.link = function (href, title, text) {
 };
 
 markdownRenderer.image = function (href, title, text) {
-    const safeHref = sanitizeLink(href, { allowImageData: true });
+    const safeHref = resolveMarkdownImageSource(href, markdownRenderContext.filePath);
     if (!safeHref) {
         return '';
     }
@@ -96,8 +159,14 @@ marked.setOptions({
     headerIds: false
 });
 
-function renderMarkdown(markdown) {
-    return marked.parse(String(markdown || ''));
+function renderMarkdown(markdown, options = {}) {
+    markdownRenderContext.filePath = options?.filePath || null;
+
+    try {
+        return marked.parse(String(markdown || ''));
+    } finally {
+        markdownRenderContext.filePath = null;
+    }
 }
 
 function listen(channel, callback) {

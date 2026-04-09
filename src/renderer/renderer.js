@@ -190,7 +190,7 @@ function updatePreview() {
     }
 
     const renderedHtml = window.electronAPI
-        ? window.electronAPI.renderMarkdown(markdown)
+        ? window.electronAPI.renderMarkdown(markdown, { filePath: currentFilePath })
         : escapeHtml(markdown).replace(/\n/g, '<br>');
 
     const sanitizedHtml = sanitizeRenderedHtml(renderedHtml);
@@ -263,9 +263,13 @@ function sanitizeUrl(url, options = {}) {
         return '';
     }
 
-    const { allowImageData = false } = options;
+    const { allowImageData = false, allowFile = false } = options;
 
     if (value.startsWith('#')) {
+        return value;
+    }
+
+    if (allowFile && value.toLowerCase().startsWith('file://')) {
         return value;
     }
 
@@ -323,7 +327,7 @@ function sanitizeRenderedHtml(html) {
             }
 
             if (attrName === 'src') {
-                const safeSrc = sanitizeUrl(attrValue, { allowImageData: true });
+                const safeSrc = sanitizeUrl(attrValue, { allowImageData: true, allowFile: true });
                 if (!safeSrc) {
                     element.removeAttribute(attribute.name);
                 } else {
@@ -585,6 +589,7 @@ async function saveFile() {
         currentFilePath = result.path;
         currentFileName.textContent = result.name;
         setModified(false);
+        updatePreview();
         showSaveNotification();
     }
 
@@ -604,6 +609,7 @@ async function saveFileAs() {
         currentFilePath = result.path;
         currentFileName.textContent = result.name;
         setModified(false);
+        updatePreview();
         showSaveNotification();
     }
 
@@ -631,8 +637,36 @@ async function ensureMathTypesetForExport() {
     });
 }
 
+async function waitForPreviewImages(timeoutMs = 5000) {
+    const pendingImages = [...preview.querySelectorAll('img')].filter((image) => !image.complete);
+
+    if (pendingImages.length === 0) {
+        return;
+    }
+
+    await Promise.allSettled(pendingImages.map((image) => new Promise((resolve) => {
+        let settled = false;
+
+        const finish = () => {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
+            image.removeEventListener('load', finish);
+            image.removeEventListener('error', finish);
+            resolve();
+        };
+
+        image.addEventListener('load', finish, { once: true });
+        image.addEventListener('error', finish, { once: true });
+        setTimeout(finish, timeoutMs);
+    })));
+}
+
 window.preparePdfExport = async () => {
     await ensureMathTypesetForExport();
+    await waitForPreviewImages();
     return true;
 };
 
